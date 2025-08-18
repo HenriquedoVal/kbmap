@@ -327,17 +327,17 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
         if (kb->vkCode != key) continue;
 
         // Check if modifiers are also pressed
-        bool break_outer = false;
+        bool do_continue = false;
         for (int i = 0; i < 3; ++i) {
             WORD modifier = map->trigger.mods[i];
             if (!modifier) continue;
 
             if (!(GetKeyState(modifier) & 0x8000)) {
-                break_outer = true;
+                do_continue = true;
                 break;
             }
         }
-        if (break_outer) break;
+        if (do_continue) continue;
 
         // PERF: since we only need to copy `trigger`, ScanCodes should not
         // hold both trigger and target
