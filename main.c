@@ -90,13 +90,19 @@ static WORD get_vk(const char *str)
 
 typedef uint8_t u8;
 
+#define MAX_MODS 3
+#define MAX_SCS MAX_MODS
+#define SIDES 2
+
 typedef struct {
     WORD key;
     WORD mods[3];
+    WORD mods[MAX_MODS];
 } MapSide;
 
 typedef union {
     MapSide sides[2];
+    MapSide sides[SIDES];
     struct {
         MapSide trigger;
         MapSide target;
@@ -111,12 +117,12 @@ typedef struct {
 Remap *remap = NULL;
 
 typedef struct {
-    WORD scs[3];
-    u8 flags[3];
+    WORD scs[MAX_SCS];
+    u8 flags[MAX_SCS];
 } ScansFlags;
 
 typedef union {
-    ScansFlags sides[2];
+    ScansFlags sides[SIDES];
     struct {
         ScansFlags trigger;
         ScansFlags target;
@@ -170,24 +176,24 @@ static void dump_mappings(void)
     assert(remap);
 
     printf("Mapped virtual keys:\n"
-           "     trigger     ->    target\n"
-           "key;  modifiers  -> key;  modifiers\n");
+           "|     trigger     |    target\n"
+           "|key,  modifiers  | key,  modifiers\n\n");
 
-    for (int i = 0; i < remap->count; ++i) {
-        Map *map = &remap->map[i];
+    for (int c = 0; c < remap->count; ++c) {
+        Map *map = &remap->map[c];
 
         char buf[50];
-        for (int j = 0; j < 2; ++j) {
-            if (get_vk_name(map->sides[j].key, buf, 50))
+        for (int s = 0; s < SIDES; ++s) {
+            if (get_vk_name(map->sides[s].key, buf, 50))
                 printf("|%s, ", buf);
             else
                 printf("|%s, ", "-");
 
-            for (int k = 0; k < 3; ++k) {
-                if (get_vk_name(map->sides[j].mods[k], buf, 50))
-                    printf("%13s, ", buf);
+            for (int m = 0; m < MAX_MODS; ++m) {
+                if (get_vk_name(map->sides[s].mods[m], buf, 50))
+                    printf("%s, ", buf);
                 else
-                    printf("%13s, ", "-");
+                    printf("%s, ", "-");
             }
         }
         printf("\n");
@@ -199,8 +205,8 @@ static void dump_mappings(void)
 
 static void dump_inputs(UINT count, LPINPUT inputs, int size)
 {
-    for (UINT i = 0; i < count; ++i) {
-        INPUT *inp = &inputs[i];
+    for (UINT c = 0; c < count; ++c) {
+        INPUT *inp = &inputs[c];
         assert(inp->type == INPUT_KEYBOARD);
 
         char buf[50];
@@ -244,7 +250,6 @@ static void error_out(char *fmt, ...)
 
 #   define dump_mappings(...)
 #   define dump_inputs(...)
-#   define printf(...)
 #endif
 
 
@@ -261,7 +266,7 @@ static void error_out(char *fmt, ...)
 
 static void identify_triggers(ScansFlags *triggers)
 {
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < MAX_SCS; ++i) {
         WORD vk;
 
         switch (triggers->scs[i]) {
@@ -303,12 +308,18 @@ static void identify_triggers(ScansFlags *triggers)
 
 static bool g_remapping = false;
 
-// 2 to reset trigger modifiers
-// 2 to set target modifiers
+// 3 to reset trigger modifiers
+// 3 to set target modifiers
 // 2 to press target key down and up
-// 2 to reset target modifiers
-// 2 to set trigger modifiers
-#define MAX_INPUTS 10
+// 3 to reset target modifiers
+// 3 to set trigger modifiers (if not ssc_mvk)
+#define MAX_INPUTS    \
+    (MAX_MODS * 2 +   \
+     2 +              \
+     MAX_MODS * 2)
+    
+static_assert(MAX_INPUTS == 14, "");
+
 
 static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
                                               WPARAM wParam,
@@ -319,8 +330,8 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
 
     KBDLLHOOKSTRUCT *kb = (KBDLLHOOKSTRUCT*)lParam;
 
-    for (u8 i = 0; i < remap->count; ++i) {
-        Map *map = &remap->map[i];
+    for (u8 c = 0; c < remap->count; ++c) {
+        Map *map = &remap->map[c];
         WORD key = map->trigger.key;
         assert(key && key != VK_NOT_FOUND);
 
@@ -328,8 +339,8 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
 
         // Check if modifiers are also pressed
         bool do_continue = false;
-        for (int i = 0; i < 3; ++i) {
-            WORD modifier = map->trigger.mods[i];
+        for (int m = 0; m < MAX_MODS; ++m) {
+            WORD modifier = map->trigger.mods[m];
             if (!modifier) continue;
 
             if (!(GetKeyState(modifier) & 0x8000)) {
@@ -341,7 +352,7 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
 
         // PERF: since we only need to copy `trigger`, ScanCodes should not
         // hold both trigger and target
-        ScanCodes scs = scan_codes[i];
+        ScanCodes scs = scan_codes[c];
         identify_triggers(&scs.trigger);
 
         INPUT inputs[MAX_INPUTS] = {0};
@@ -349,11 +360,11 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
         u8 cursor = 0;
 
         // Reset trigger modifiers
-        for (int i = 0; i < 3; ++i) {
-            WORD modifier = scs.trigger.scs[i];
+        for (int m = 0; m < MAX_MODS; ++m) {
+            WORD modifier = scs.trigger.scs[m];
             if (!modifier) continue;
 
-            u8 flags = scs.trigger.flags[i];
+            u8 flags = scs.trigger.flags[m];
 
             inp = &inputs[cursor++];
             inp->type = INPUT_KEYBOARD;
@@ -362,11 +373,11 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
         }
 
         // Set target modifiers
-        for (int i = 0; i < 3; ++i) {
-            WORD modifier = scs.target.scs[i];
+        for (int m = 0; m < MAX_MODS; ++m) {
+            WORD modifier = scs.target.scs[m];
             if (!modifier) continue;
 
-            u8 flags = scs.target.flags[i];
+            u8 flags = scs.target.flags[m];
 
             inp = &inputs[cursor++];
             inp->type = INPUT_KEYBOARD;
@@ -388,11 +399,11 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
         inp->ki.dwFlags = KEYEVENTF_KEYUP;
 
         // Reset target modifiers
-        for (int i = 0; i < 3; ++i) {
-            WORD modifier = scs.target.scs[i];
+        for (int m = 0; m < MAX_MODS; ++m) {
+            WORD modifier = scs.target.scs[m];
             if (!modifier) continue;
 
-            u8 flags = scs.target.flags[i];
+            u8 flags = scs.target.flags[m];
 
             inp = &inputs[cursor++];
             inp->type = INPUT_KEYBOARD;
@@ -401,21 +412,21 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
         }
 
         bool set_triggers = true;
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < _countof(g_ssc_mvks); ++j) {
-                WORD modifier = map->trigger.mods[i];
-                WORD vk = g_ssc_mvks[j];
+        for (int m = 0; m < MAX_MODS; ++m) {
+            WORD modifier = map->trigger.mods[m];
+            for (int i = 0; i < _countof(g_ssc_mvks); ++i) {
+                WORD vk = g_ssc_mvks[i];
                 if (modifier == vk) set_triggers = false;
             }
         }
 
         // Set trigger modifiers
         if (set_triggers) {
-            for (int i = 0; i < 3; ++i) {
-                WORD modifier = scs.trigger.scs[i];
+            for (int s = 0; s < MAX_SCS; ++s) {
+                WORD modifier = scs.trigger.scs[s];
                 if (!modifier) continue;
 
-                u8 flags = scs.trigger.flags[i];
+                u8 flags = scs.trigger.flags[s];
 
                 inp = &inputs[cursor++];
                 inp->type = INPUT_KEYBOARD;
@@ -441,6 +452,8 @@ static LRESULT __stdcall LowLevelKeyboardProc(int nCode,
  *  "Setup-time" code
 */
 
+#define FLAT_SIZE (MAX_MODS + 1)
+
 static bool parse_item(const char *key_or_val, MapSide *dest)
 {
     if (!key_or_val) return false;
@@ -448,7 +461,7 @@ static bool parse_item(const char *key_or_val, MapSide *dest)
     char *dup = _strdup(key_or_val);
     if (!dup) return false;
 
-    WORD flat[4] = {0};
+    WORD flat[FLAT_SIZE] = {0};
     const char *delim = " +";
 
     char *tok, *ntok;
@@ -465,7 +478,7 @@ static bool parse_item(const char *key_or_val, MapSide *dest)
     };
     flat[0] = vk;
 
-    for (int i = 1; i < 4; ++i) {
+    for (int i = 1; i < _countof(flat); ++i) {
         tok = strtok_s(NULL, delim, &ntok);
         vk = get_vk(tok);
         if (vk == VK_NOT_FOUND) {
@@ -482,7 +495,7 @@ static bool parse_item(const char *key_or_val, MapSide *dest)
     free(dup);
 
     int cursor = -1;
-    for (int i = 3; i >= 0; --i) {
+    for (int i = FLAT_SIZE - 1; i >= 0; --i) {
         WORD it = flat[i];
         if (!it) continue;
 
@@ -655,8 +668,8 @@ static bool parse_ini_into_remap(char *ini_path, DWORD ini_size)
 static ScanCodes to_scan_code(Map *map)
 {
     ScanCodes ret = {0};
-    for (int i = 0; i < 3; ++i) {
-        WORD vk = map->trigger.mods[i];
+    for (int m = 0; m < MAX_MODS; ++m) {
+        WORD vk = map->trigger.mods[m];
         if (!vk) continue;
 
         WORD sc;
@@ -678,12 +691,12 @@ static ScanCodes to_scan_code(Map *map)
         u8 flag = KEYEVENTF_SCANCODE;
         if (sc & 0xe0 << 8) flag |= KEYEVENTF_EXTENDEDKEY;
 
-        ret.trigger.scs[i] = sc;
-        ret.trigger.flags[i] = flag;
+        ret.trigger.scs[m] = sc;
+        ret.trigger.flags[m] = flag;
     }
 
-    for (int i = 0; i < 3; ++i) {
-        WORD vk = map->target.mods[i];
+    for (int m = 0; m < MAX_MODS; ++m) {
+        WORD vk = map->target.mods[m];
         if (!vk) continue;
 
         WORD sc = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC_EX);
@@ -691,8 +704,8 @@ static ScanCodes to_scan_code(Map *map)
         u8 flag = KEYEVENTF_SCANCODE;
         if (sc & 0xe0 << 8) flag |= KEYEVENTF_EXTENDEDKEY;
 
-        ret.target.scs[i] = sc;
-        ret.target.flags[i] = flag;
+        ret.target.scs[m] = sc;
+        ret.target.flags[m] = flag;
     }
 
     return ret;
