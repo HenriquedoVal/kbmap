@@ -96,12 +96,10 @@ typedef uint8_t u8;
 
 typedef struct {
     WORD key;
-    WORD mods[3];
     WORD mods[MAX_MODS];
 } MapSide;
 
 typedef union {
-    MapSide sides[2];
     MapSide sides[SIDES];
     struct {
         MapSide trigger;
@@ -558,20 +556,26 @@ static bool validate_remap(void)
 }
 
 
-static bool get_init_path_and_size(char **full_path, DWORD *file_size)
+static bool get_init_path_and_size(
+    char **full_path, DWORD *file_size, char *argv_ini_path)
 {
-    char *userprofile = NULL;
-    size_t upsize;
-    if (_dupenv_s(&userprofile, &upsize, "USERPROFILE")) return false;
+    char *ini_path = argv_ini_path;
+    if (ini_path == NULL) {
+        char *userprofile = NULL;
+        size_t upsize;
+        if (_dupenv_s(&userprofile, &upsize, "USERPROFILE")) return false;
 
-    const char *ini_name = ".kbmap.ini";
-    const size_t namelen = strlen(ini_name);
-    size_t size = upsize + strlen("\\") + namelen + 1;
-    char *ini_path = malloc(size);
-    if (!ini_path) return false;
+        const char *ini_name = ".kbmap.ini";
+        const size_t namelen = strlen(ini_name);
+        const size_t size = upsize + strlen("\\") + namelen + 1;
+        char *path = malloc(size);
+        if (!path) return false;
 
-    int w = sprintf_s(ini_path, size, "%s\\%s", userprofile, ini_name);
-    if (w < 0 || w > size) return false;
+        int w = sprintf_s(path, size, "%s\\%s", userprofile, ini_name);
+        if (w < 0 || w > size) return false;
+
+        ini_path = path;
+    }
 
     // Can't get needed memory allocation size for parsing through
     // GetPrivateProfileStringA so we alloc the size of the whole file
@@ -599,7 +603,7 @@ static bool get_init_path_and_size(char **full_path, DWORD *file_size)
 }
 
 
-static bool parse_ini_into_remap(char *ini_path, DWORD ini_size)
+static bool parse_ini_into_remap(const char *ini_path, DWORD ini_size)
 {
     assert(ini_path);
     if (!ini_size) return false;
@@ -730,11 +734,11 @@ static bool populate_scan_codes(void)
 }
 
 
-static bool kbmap_setup(void)
+static bool kbmap_setup(char *argv_ini_path)
 {
     char *ini_path;
     DWORD ini_size;
-    if (!get_init_path_and_size(&ini_path, &ini_size)) {
+    if (!get_init_path_and_size(&ini_path, &ini_size, argv_ini_path)) {
         error_out("Could not find .ini file\n");
         return false;
     }
@@ -742,7 +746,7 @@ static bool kbmap_setup(void)
     if (!parse_ini_into_remap(ini_path, ini_size))
         return false;
 
-    free(ini_path);
+    if (ini_path != argv_ini_path) free(ini_path);
 
     if (!validate_remap()) {
         error_out("Invalid Remap\n");
@@ -758,12 +762,19 @@ static bool kbmap_setup(void)
 
 
 #ifdef KBMAP_CONSOLE
-int main(void)
+int main(int argc, char **argv)
+{
+    char *ini_path = NULL;
+    if (argc == 2) ini_path = argv[1];
+
 #else
 int WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
-#endif
 {
-    if (!kbmap_setup()) {
+    char *ini_path = NULL;
+
+#endif
+
+    if (!kbmap_setup(ini_path)) {
         error_out("Errors occurred. Exiting.\n");
         return 1;
     }
